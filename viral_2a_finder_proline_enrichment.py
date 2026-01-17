@@ -14,6 +14,7 @@ from io import StringIO
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import time
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import Counter, defaultdict
@@ -62,45 +63,85 @@ class Viral2AFinder:
         """
         self.results = []
         self.all_downstream = []  # Store all downstream sequences for enrichment
+        self.all_polyproteins = []  # Store ALL polyproteins for virome-wide analysis
         self.uniprot_base = "https://rest.uniprot.org/uniprotkb"
         self.analysis_window = analysis_window
         
-    def download_viral_polyproteins(self, batch_size=500):
+    def download_viral_polyproteins(self, total_wanted=2000):
         """
         Download viral polyproteins with chain annotations from UniProt
+        Uses pagination to get more than 500 sequences
         """
         print("=" * 80)
         print("STEP 1: Downloading viral polyproteins from UniProt...")
         print("=" * 80)
         
         query = "(taxonomy_id:10239) AND (cc_function:polyprotein)"
-        
         url = f"{self.uniprot_base}/search"
-        params = {
-            'query': query,
-            'format': 'fasta',
-            'size': batch_size
-        }
+        
+        all_sequences = []
+        size_per_request = 500  # Max safe size per request
+        cursor = None
         
         print(f"Query: {query}")
-        print(f"Fetching up to {batch_size} sequences...")
+        print(f"Fetching sequences in batches of {size_per_request}...")
         
         try:
-            response = requests.get(url, params=params)
-            response.raise_for_status()
+            while len(all_sequences) < total_wanted:
+                params = {
+                    'query': query,
+                    'format': 'fasta',
+                    'size': size_per_request
+                }
+                
+                if cursor:
+                    params['cursor'] = cursor
+                
+                response = requests.get(url, params=params)
+                response.raise_for_status()
+                
+                # Parse FASTA sequences
+                fasta_io = StringIO(response.text)
+                batch_sequences = list(SeqIO.parse(fasta_io, "fasta"))
+                
+                if not batch_sequences:
+                    break  # No more sequences
+                
+                all_sequences.extend(batch_sequences)
+                print(f"  Downloaded {len(all_sequences)} sequences so far...")
+                
+                # Check if there's a cursor for next page
+                if 'Link' in response.headers:
+                    link_header = response.headers['Link']
+                    if 'cursor=' in link_header:
+                        # Extract cursor from Link header
+                        cursor_match = re.search(r'cursor=([^&>]+)', link_header)
+                        if cursor_match:
+                            cursor = cursor_match.group(1)
+                        else:
+                            break
+                    else:
+                        break
+                else:
+                    break
+                
+                # Small delay to be nice to the API
+                time.sleep(0.5)
             
-            fasta_io = StringIO(response.text)
-            sequences = list(SeqIO.parse(fasta_io, "fasta"))
-            
-            print(f"[OK] Downloaded {len(sequences)} viral polyprotein sequences")
-            return sequences
+            print(f"[OK] Downloaded {len(all_sequences)} viral polyprotein sequences")
+            return all_sequences
             
         except Exception as e:
             print(f"[ERROR] Error downloading sequences: {e}")
+            if all_sequences:
+                print(f"[OK] Returning {len(all_sequences)} sequences downloaded so far")
+                return all_sequences
+            
             print("Trying alternative query...")
             
+            # Try alternative query with single batch
             query2 = "(taxonomy_id:10239) AND (keyword:polyprotein)"
-            params['query'] = query2
+            params = {'query': query2, 'format': 'fasta', 'size': 500}
             try:
                 response = requests.get(url, params=params)
                 response.raise_for_status()
@@ -214,6 +255,7 @@ class Viral2AFinder:
         print("STEP 2-4: Analyzing sequences for 2A motifs...")
         print("=" * 80)
         print("Filter: P at position 1, D/E/T at position 2")
+        print(f"Storing ALL {len(sequences)} polyproteins for virome-wide enrichment analysis")
         
         total_2a_found = 0
         valid_2a_proteins = 0
@@ -222,6 +264,15 @@ class Viral2AFinder:
         for idx, record in enumerate(sequences, 1):
             if idx % 50 == 0:
                 print(f"  Processed {idx}/{len(sequences)} sequences...")
+            
+            # Store ALL polyproteins for enrichment analysis
+            family = self.is_known_2a_family(record.description)
+            virus_name = self.extract_virus_name(record.description)
+            self.all_polyproteins.append({
+                'sequence': str(record.seq),
+                'family': family if family else 'Unknown',
+                'virus_name': virus_name
+            })
             
             motifs = self.find_2a_motifs(record.seq)
             
@@ -280,32 +331,33 @@ class Viral2AFinder:
         
     def calculate_enrichment(self):
         """
-        Calculate amino acid enrichment at each position following Proline
+        Calculate amino acid enrichment at each position in 2A downstream proteins
         Compare to background amino acid frequency
         """
         print("\n" + "=" * 80)
-        print("ENRICHMENT ANALYSIS: Amino acid frequencies after Proline")
+        print("ENRICHMENT ANALYSIS: Amino acid frequencies in 2A downstream proteins")
         print("=" * 80)
+        print(f"Analyzing {len(self.all_downstream)} 2A downstream protein sequences")
         
         if not self.all_downstream:
             print("No sequences to analyze")
-            return None, None, None
+            return None, None, None, None
         
-        # Calculate position-specific frequencies
+        # Calculate position-specific frequencies in 2A downstream proteins
         position_counts = defaultdict(lambda: Counter())
         
         for entry in self.all_downstream:
             seq = entry['sequence']
-            # Analyze first N positions after P
+            # Analyze first N positions
             for i in range(min(len(seq), self.analysis_window)):
                 aa = seq[i]
                 if aa in AMINO_ACIDS:  # Skip non-standard amino acids
                     position_counts[i+1][aa] += 1  # 1-indexed positions
         
-        # Calculate background frequency (all positions combined)
+        # Calculate background frequency (all positions combined in 2A downstream proteins)
         background = Counter()
         for entry in self.all_downstream:
-            for aa in entry['sequence'][:self.analysis_window]:
+            for aa in entry['sequence']:  # Use entire sequence for background
                 if aa in AMINO_ACIDS:
                     background[aa] += 1
         
@@ -341,32 +393,39 @@ class Viral2AFinder:
         
         plt.figure(figsize=(14, 10))
         
-        # Create heatmap
+        # Create heatmap with soft warm colors (red, orange, pink, beige)
+        import matplotlib.colors as mcolors
+        
+        # Custom colormap: beige (low) -> peach/pink (medium) -> coral/red (high)
+        colors = ['#F5DEB3', '#FFE4B5', '#FFDAB9', '#FFC0CB', '#FFB6C1', 
+                  '#FF9999', '#FF7F7F', '#FF6B6B', '#E74C3C', '#C0392B']
+        n_bins = 100
+        cmap = mcolors.LinearSegmentedColormap.from_list('warm_soft', colors, N=n_bins)
+        
+        # Custom colormap: very light purple/lavender (depleted) -> beige (neutral) -> coral/red (enriched)
+        colors = ['#F8F0FF', '#F0E6FF', '#E6D9F0', '#E8E0F0', '#F5F5DC', '#FFEFD5', 
+                  '#FFE4B5', '#FFDAB9', '#FFC0CB', '#FFB6C1', '#FF9999', 
+                  '#FF7F7F', '#FF6B6B', '#E74C3C', '#C0392B']
+        cmap = mcolors.LinearSegmentedColormap.from_list('lavender_beige_red', colors, N=100)
+        
         ax = sns.heatmap(
             enrichment_matrix,
             xticklabels=positions,
             yticklabels=AMINO_ACIDS,
-            cmap='RdBu_r',
+            cmap=cmap,  # Custom: light blue -> beige -> red
             center=0,
             vmin=-3,
             vmax=3,
             cbar_kws={'label': 'Log2 Enrichment vs Background'},
-            linewidths=0.5,
-            linecolor='gray'
+            linewidths=0.2,
+            linecolor='#F5F5DC',  # Beige lines
+            annot=False
         )
         
-        plt.title('Amino Acid Enrichment in 2A Downstream Proteins\n(Positions after Proline)', 
-                  fontsize=14, fontweight='bold', pad=20)
-        plt.xlabel('Position', fontsize=12, fontweight='bold')
-        plt.ylabel('Amino Acid', fontsize=12, fontweight='bold')
-        
-        # Highlight position 2 (where we filter for D/E/T)
-        ax.add_patch(plt.Rectangle((0, AMINO_ACIDS.index('D')), 1, 1, 
-                                   fill=False, edgecolor='yellow', lw=3))
-        ax.add_patch(plt.Rectangle((0, AMINO_ACIDS.index('E')), 1, 1, 
-                                   fill=False, edgecolor='yellow', lw=3))
-        ax.add_patch(plt.Rectangle((0, AMINO_ACIDS.index('T')), 1, 1, 
-                                   fill=False, edgecolor='yellow', lw=3))
+        plt.title(f'Amino Acid Enrichment in 2A Downstream Proteins (n={len(self.all_downstream)})\n(First {self.analysis_window} positions after 2A cleavage)', 
+                  fontsize=14, fontweight='bold', pad=20, color='#8B4513')
+        plt.xlabel('Position', fontsize=12, fontweight='bold', color='#A0522D')
+        plt.ylabel('Amino Acid', fontsize=12, fontweight='bold', color='#A0522D')
         
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
@@ -380,21 +439,28 @@ class Viral2AFinder:
         
         plt.figure(figsize=(14, 10))
         
+        # Custom warm colormap: beige -> peach -> coral -> pink -> red/orange
+        import matplotlib.colors as mcolors
+        colors = ['#FFF8DC', '#FFEBCD', '#FFE4C4', '#FFDAB9', '#FFDEAD',
+                  '#FFB6C1', '#FFA07A', '#FF8C69', '#FF7F50', '#FF6347', 
+                  '#FF4500', '#DC143C']
+        cmap = mcolors.LinearSegmentedColormap.from_list('warm_gradient', colors, N=100)
+        
         ax = sns.heatmap(
             freq_matrix * 100,  # Convert to percentages
             xticklabels=positions,
             yticklabels=AMINO_ACIDS,
-            cmap='YlOrRd',
+            cmap=cmap,  # Custom warm gradient
             cbar_kws={'label': 'Frequency (%)'},
-            linewidths=0.5,
-            linecolor='gray',
+            linewidths=0.2,
+            linecolor='#FFF8DC',  # Cornsilk/beige lines
             annot=False
         )
         
-        plt.title('Amino Acid Frequency in 2A Downstream Proteins\n(Positions after Proline)', 
-                  fontsize=14, fontweight='bold', pad=20)
-        plt.xlabel('Position', fontsize=12, fontweight='bold')
-        plt.ylabel('Amino Acid', fontsize=12, fontweight='bold')
+        plt.title(f'Amino Acid Frequency in 2A Downstream Proteins (n={len(self.all_downstream)})\n(First {self.analysis_window} positions after 2A cleavage)', 
+                  fontsize=14, fontweight='bold', pad=20, color='#8B4513')
+        plt.xlabel('Position', fontsize=12, fontweight='bold', color='#A0522D')
+        plt.ylabel('Amino Acid', fontsize=12, fontweight='bold', color='#A0522D')
         
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
@@ -467,14 +533,32 @@ class Viral2AFinder:
             print(f"Total downstream proteins analyzed for enrichment: {len(self.all_downstream)}")
             return
         
-        # 1. Summary CSV
+        # 1a. ALL 2A downstream proteins table
+        if self.all_downstream:
+            df_all_2a = pd.DataFrame([{
+                'virus_name': entry['virus_name'],
+                'family': entry['family'],
+                'downstream_sequence': entry['sequence'],
+                'downstream_length': len(entry['sequence']),
+                'position_1': entry['sequence'][0] if len(entry['sequence']) > 0 else '',
+                'position_2': entry['sequence'][1] if len(entry['sequence']) > 1 else '',
+                'position_3': entry['sequence'][2] if len(entry['sequence']) > 2 else '',
+                'first_10_residues': entry['sequence'][:10],
+                'first_20_residues': entry['sequence'][:20]
+            } for entry in self.all_downstream])
+            
+            all_2a_csv = f"2a_ALL_downstream_{timestamp}.csv"
+            df_all_2a.to_csv(all_2a_csv, index=False)
+            print(f"\n[OK] Saved ALL 2A downstream proteins to: {all_2a_csv}")
+        
+        # 1b. Summary CSV (filtered)
         df = pd.DataFrame(self.results)
         csv_file = f"2a_PD_PE_PT_filtered_{timestamp}.csv"
         df_summary = df[['virus_name', 'accession', 'family', '2a_motif', 
                         '2a_position', 'dipeptide', 'position_2', 'context',
                         'downstream_length', 'confidence']]
         df_summary.to_csv(csv_file, index=False)
-        print(f"\n[OK] Saved filtered summary to: {csv_file}")
+        print(f"[OK] Saved P[D/E/T] filtered summary to: {csv_file}")
         
         # 2. Detailed Excel
         excel_file = f"2a_PD_PE_PT_detailed_{timestamp}.xlsx"
@@ -513,7 +597,8 @@ class Viral2AFinder:
         print("\n" + "=" * 80)
         print("SUMMARY STATISTICS")
         print("=" * 80)
-        print(f"Total 2A downstream proteins analyzed: {len(self.all_downstream)}")
+        print(f"Total viral polyproteins analyzed: {len(self.all_polyproteins)}")
+        print(f"2A downstream proteins found: {len(self.all_downstream)}")
         print(f"Proteins matching P[D/E/T] pattern: {len(self.results)}")
         print(f"High confidence: {sum(1 for r in self.results if r['confidence'] == 'HIGH')}")
         
@@ -528,7 +613,7 @@ class Viral2AFinder:
             for family, count in family_counts.items():
                 print(f"  {family}: {count}")
     
-    def run_analysis(self, batch_size=500):
+    def run_analysis(self, total_sequences=2000):
         """
         Run the complete analysis pipeline
         """
@@ -541,8 +626,8 @@ class Viral2AFinder:
         print(f"Filter: P at position 1, D/E/T at position 2")
         print(f"Enrichment analysis window: {self.analysis_window} positions\n")
         
-        # Download sequences
-        sequences = self.download_viral_polyproteins(batch_size=batch_size)
+        # Download sequences with pagination
+        sequences = self.download_viral_polyproteins(total_wanted=total_sequences)
         
         if not sequences:
             print("No sequences downloaded. Exiting.")
@@ -572,8 +657,8 @@ def main():
     # Initialize with analysis window (positions to analyze after P)
     finder = Viral2AFinder(analysis_window=20)
     
-    # Run analysis
-    finder.run_analysis(batch_size=500)
+    # Run analysis to find ALL 2A sequences (downloads up to 2000 sequences)
+    finder.run_analysis(total_sequences=2000)
 
 
 if __name__ == "__main__":
