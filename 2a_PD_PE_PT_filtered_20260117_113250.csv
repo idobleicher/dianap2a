@@ -1,0 +1,3 @@
+virus_name,accession,family,2a_motif,2a_position,dipeptide,position_2,context,downstream_length,confidence
+Ectropis obliqua picorna-like virus,Q6UP17,Unclassified_picorna-like,DIESNPGP,1184,PT,T,PTQSKPTGAQ,1796,HIGH
+Ljunganvirus 1,Q8JV21,Picornaviridae,DVETNPGP,813,PD,D,PDIELVYKNR,1433,HIGH
