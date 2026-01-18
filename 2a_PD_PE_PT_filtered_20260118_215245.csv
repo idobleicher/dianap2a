@@ -1,0 +1,12 @@
+virus_name,accession,family,2a_motif,2a_position,dipeptide,position_2,context,downstream_length,confidence
+Ectropis obliqua picorna-like virus,Q6UP17,Unclassified_picorna-like,DIESNPGP,1184,PT,T,PTQSKPTGAQ,1796,HIGH
+Ljunganvirus 1,Q8JV21,Picornaviridae,DVETNPGP,813,PD,D,PDIELVYKNR,1433,HIGH
+Ljungan virus,A0A0M4R9H0,Unknown,DVESNPGP,813,PD,D,PDIELVYKNR,1436,LOW
+Bovine parechovirus,A0A8E0N7R7,Unknown,DIESNPGP,821,PT,T,PTFEVPLPTG,1497,LOW
+Ljungan virus 145SL,Q8JV19,Unknown,DVESNPGP,813,PD,D,PDIELVYKNR,1436,LOW
+Ljungan virus 174F,Q8JV20,Unknown,DVETNPGP,813,PD,D,PDIELVYKNR,1433,LOW
+Ljungan virus,A0A0M3UMP5,Unknown,DVESNPGP,813,PD,D,PDIELVYKNR,1436,LOW
+Ljunganvirus 5,A0A1B4Z1H7,Picornaviridae,DVESNPGP,813,PD,D,PDIELVYKSR,1436,HIGH
+Ljungan virus 145SL,C7SI01,Unknown,DVESNPGP,813,PD,D,PDIELVYKNR,1436,LOW
+Ljungan virus,A8QWG2,Unknown,DVETNPGP,813,PD,D,PDIELVYKNR,1433,LOW
+Ljunganvirus 3,Q80N16,Picornaviridae,DVETNPGP,815,PD,D,PDIELVYKPR,1432,HIGH

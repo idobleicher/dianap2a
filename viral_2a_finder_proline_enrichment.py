@@ -295,7 +295,9 @@ class Viral2AFinder:
                         self.all_downstream.append({
                             'sequence': downstream,
                             'family': family if family else 'Unknown',
-                            'virus_name': virus_name
+                            'virus_name': virus_name,
+                            'motif_start': motif['position'],
+                            'protein_sequence': str(record.seq)
                         })
                         
                         # Check position 2 filter
@@ -446,9 +448,13 @@ class Viral2AFinder:
                   '#FF4500', '#DC143C']
         cmap = mcolors.LinearSegmentedColormap.from_list('warm_gradient', colors, N=100)
         
+        # Start from position 2 (skip position 1 which is always P)
+        freq_matrix_from_2 = freq_matrix[:, 1:]  # Skip first column
+        positions_from_2 = positions[1:]  # Skip first position
+        
         ax = sns.heatmap(
-            freq_matrix * 100,  # Convert to percentages
-            xticklabels=positions,
+            freq_matrix_from_2 * 100,  # Convert to percentages
+            xticklabels=positions_from_2,
             yticklabels=AMINO_ACIDS,
             cmap=cmap,  # Custom warm gradient
             cbar_kws={'label': 'Frequency (%)'},
@@ -457,7 +463,7 @@ class Viral2AFinder:
             annot=False
         )
         
-        plt.title(f'Amino Acid Frequency in 2A Downstream Proteins (n={len(self.all_downstream)})\n(First {self.analysis_window} positions after 2A cleavage)', 
+        plt.title(f'Amino Acid Frequency in 2A Downstream Proteins (n={len(self.all_downstream)})\n(Positions 2-{self.analysis_window} after 2A cleavage)', 
                   fontsize=14, fontweight='bold', pad=20, color='#8B4513')
         plt.xlabel('Position', fontsize=12, fontweight='bold', color='#A0522D')
         plt.ylabel('Amino Acid', fontsize=12, fontweight='bold', color='#A0522D')
@@ -503,6 +509,251 @@ class Viral2AFinder:
         
         return df_enrichment
     
+    def analyze_upstream_phenylalanine(self, timestamp):
+        """
+        Analyze F (Phenylalanine) in upstream protein (N-terminal region)
+        """
+        print("\n" + "=" * 80)
+        print("UPSTREAM PROTEIN F ANALYSIS (N-terminal region)")
+        print("=" * 80)
+        
+        if not self.all_downstream:
+            print("No sequences to analyze")
+            return None, None
+        
+        # Extract upstream sequences (N-terminal region, first 20 positions)
+        window = 20
+        f_counts_upstream = defaultdict(int)
+        total_counts_upstream = defaultdict(int)
+        
+        for entry in self.all_downstream:
+            motif_start = entry['motif_start']
+            full_seq = entry['protein_sequence']
+            
+            # Get upstream sequence (entire sequence before 2A motif)
+            upstream_seq = full_seq[:motif_start]
+            
+            # Analyze N-terminal region (first 20 positions of upstream protein)
+            for i in range(min(len(upstream_seq), window)):
+                pos = i + 1  # 1, 2, 3, etc. (1-indexed)
+                aa = upstream_seq[i]
+                total_counts_upstream[pos] += 1
+                if aa == 'F':
+                    f_counts_upstream[pos] += 1
+        
+        # Calculate frequencies
+        f_freq_upstream = {}
+        for pos in range(1, window + 1):
+            if total_counts_upstream[pos] > 0:
+                f_freq_upstream[pos] = (f_counts_upstream[pos] / total_counts_upstream[pos]) * 100
+            else:
+                f_freq_upstream[pos] = 0
+        
+        # Calculate background
+        total_f = sum(f_counts_upstream.values())
+        total_aa = sum(total_counts_upstream.values())
+        background_f_upstream = (total_f / total_aa) * 100 if total_aa > 0 else 0
+        
+        print(f"\nUpstream Background F frequency (N-terminal region): {background_f_upstream:.2f}%")
+        print(f"\nF frequency at each upstream position (N-terminal, positions 1-{window}):")
+        print("-" * 70)
+        print(f"{'Position':<12} {'F Count':<12} {'Total':<12} {'F %':<12} {'vs Background':<15}")
+        print("-" * 70)
+        
+        for pos in range(1, window + 1):
+            if pos in f_freq_upstream:
+                f_pct = f_freq_upstream[pos]
+                fold_change = f_pct / background_f_upstream if background_f_upstream > 0 else 0
+                enrichment = "+" if fold_change > 1.5 else ("" if fold_change > 0.5 else "-")
+                print(f"{pos:<12} {f_counts_upstream[pos]:<12} {total_counts_upstream[pos]:<12} {f_pct:<12.2f} {fold_change:.2f}x {enrichment}")
+        
+        return f_freq_upstream, f_counts_upstream, total_counts_upstream, background_f_upstream
+    
+    def analyze_phenylalanine_distribution(self, timestamp):
+        """
+        Analyze F (Phenylalanine) distribution across all positions
+        """
+        print("\n" + "=" * 80)
+        print("PHENYLALANINE (F) DISTRIBUTION ANALYSIS")
+        print("=" * 80)
+        
+        if not self.all_downstream:
+            print("No sequences to analyze")
+            return
+        
+        # Count F at each position
+        f_counts = defaultdict(int)
+        total_counts = defaultdict(int)
+        
+        for entry in self.all_downstream:
+            seq = entry['sequence']
+            for i in range(min(len(seq), self.analysis_window)):
+                aa = seq[i]
+                total_counts[i+1] += 1
+                if aa == 'F':
+                    f_counts[i+1] += 1
+        
+        # Calculate frequencies
+        f_freq_by_position = {}
+        for pos in range(1, self.analysis_window + 1):
+            if total_counts[pos] > 0:
+                f_freq_by_position[pos] = (f_counts[pos] / total_counts[pos]) * 100
+            else:
+                f_freq_by_position[pos] = 0
+        
+        # Calculate background F frequency (all positions)
+        total_f = sum(f_counts.values())
+        total_aa = sum(total_counts.values())
+        background_f_freq = (total_f / total_aa) * 100 if total_aa > 0 else 0
+        
+        # Print results
+        print(f"\nBackground F frequency (all positions): {background_f_freq:.2f}%")
+        print(f"\nF frequency at each position:")
+        print("-" * 60)
+        print(f"{'Position':<10} {'F Count':<12} {'Total':<12} {'F %':<12} {'vs Background':<15}")
+        print("-" * 60)
+        
+        for pos in range(1, self.analysis_window + 1):
+            if pos in f_freq_by_position:
+                f_pct = f_freq_by_position[pos]
+                fold_change = f_pct / background_f_freq if background_f_freq > 0 else 0
+                enrichment = "+" if fold_change > 1.5 else ("" if fold_change > 0.5 else "-")
+                print(f"{pos:<10} {f_counts[pos]:<12} {total_counts[pos]:<12} {f_pct:<12.2f} {fold_change:.2f}x {enrichment}")
+        
+        # Create visualization
+        import matplotlib.pyplot as plt
+        
+        positions = list(range(2, self.analysis_window + 1))  # Skip position 1
+        f_frequencies = [f_freq_by_position.get(pos, 0) for pos in positions]
+        
+        plt.figure(figsize=(14, 6))
+        bars = plt.bar(positions, f_frequencies, color='#FF6B6B', alpha=0.8, edgecolor='#C0392B', linewidth=1.5)
+        plt.axhline(y=background_f_freq, color='#3498DB', linestyle='--', linewidth=2, 
+                    label=f'Background F frequency ({background_f_freq:.1f}%)')
+        
+        # Highlight positions 2-4
+        for i, pos in enumerate(positions):
+            if pos in [2, 3, 4]:
+                bars[i].set_color('#DC143C')
+                bars[i].set_alpha(1.0)
+        
+        plt.xlabel('Position', fontsize=12, fontweight='bold', color='#8B4513')
+        plt.ylabel('F (Phenylalanine) Frequency (%)', fontsize=12, fontweight='bold', color='#8B4513')
+        plt.title(f'Phenylalanine (F) Distribution in 2A Downstream Proteins (n={len(self.all_downstream)})\nPositions 2-{self.analysis_window}',
+                  fontsize=14, fontweight='bold', color='#8B4513', pad=20)
+        plt.legend(fontsize=11)
+        plt.grid(axis='y', alpha=0.3, linestyle=':', color='gray')
+        plt.xticks(positions)
+        
+        output_file = f"2a_phenylalanine_analysis_{timestamp}.png"
+        plt.tight_layout()
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"\n[OK] Saved F distribution plot to: {output_file}")
+        
+        # Save detailed data to CSV
+        csv_data = []
+        for pos in range(1, self.analysis_window + 1):
+            f_pct = f_freq_by_position.get(pos, 0)
+            fold_change = f_pct / background_f_freq if background_f_freq > 0 else 0
+            csv_data.append({
+                'Position': pos,
+                'F_Count': f_counts[pos],
+                'Total_Count': total_counts[pos],
+                'F_Frequency_%': f_pct,
+                'Background_%': background_f_freq,
+                'Fold_Change': fold_change,
+                'Enriched': 'Yes' if fold_change > 1.5 else 'No'
+            })
+        
+        df_f = pd.DataFrame(csv_data)
+        csv_file = f"2a_phenylalanine_analysis_{timestamp}.csv"
+        df_f.to_csv(csv_file, index=False)
+        print(f"[OK] Saved F analysis data to: {csv_file}")
+        
+        # Now analyze upstream (before 2A)
+        f_freq_upstream, f_counts_upstream, total_counts_upstream, bg_upstream = self.analyze_upstream_phenylalanine(timestamp)
+        
+        # Create comparison plot
+        print("\n" + "=" * 80)
+        print("COMPARISON: Upstream vs Downstream F Distribution")
+        print("=" * 80)
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 6))
+        
+        # Upstream plot (positions 1-20 from N-terminus)
+        positions_up = list(range(1, 21))
+        f_freq_up = [f_freq_upstream.get(pos, 0) for pos in positions_up]
+        
+        bars_up = ax1.bar(positions_up, f_freq_up, color='#4A90E2', alpha=0.8, edgecolor='#2E5C8A', linewidth=1.5)
+        # Highlight position 2 in upstream
+        if len(bars_up) > 1:
+            bars_up[1].set_color('#2E5C8A')  # Position 2
+            bars_up[1].set_alpha(1.0)
+        
+        ax1.axhline(y=bg_upstream, color='#E74C3C', linestyle='--', linewidth=2, 
+                    label=f'Background ({bg_upstream:.1f}%)')
+        ax1.set_xlabel('Position (N-terminal)', fontsize=12, fontweight='bold', color='#8B4513')
+        ax1.set_ylabel('F Frequency (%)', fontsize=12, fontweight='bold', color='#8B4513')
+        ax1.set_title('UPSTREAM Protein\n(N-terminal region)', fontsize=13, fontweight='bold', color='#2E5C8A')
+        ax1.legend(fontsize=10)
+        ax1.grid(axis='y', alpha=0.3, linestyle=':', color='gray')
+        ax1.set_ylim(0, 105)
+        
+        # Downstream plot (positions 2-20)
+        positions_down = list(range(2, 21))
+        f_freq_down = [f_freq_by_position.get(pos, 0) for pos in positions_down]
+        
+        bars = ax2.bar(positions_down, f_freq_down, color='#FF6B6B', alpha=0.8, edgecolor='#C0392B', linewidth=1.5)
+        # Highlight positions 2-4 and 11
+        for i, pos in enumerate(positions_down):
+            if pos in [2, 3, 4, 11]:
+                bars[i].set_color('#DC143C')
+                bars[i].set_alpha(1.0)
+        
+        ax2.axhline(y=background_f_freq, color='#3498DB', linestyle='--', linewidth=2, 
+                    label=f'Background ({background_f_freq:.1f}%)')
+        ax2.set_xlabel('Position (after 2A)', fontsize=12, fontweight='bold', color='#8B4513')
+        ax2.set_ylabel('F Frequency (%)', fontsize=12, fontweight='bold', color='#8B4513')
+        ax2.set_title('DOWNSTREAM Protein\n(After 2A Cleavage)', fontsize=13, fontweight='bold', color='#C0392B')
+        ax2.legend(fontsize=10)
+        ax2.grid(axis='y', alpha=0.3, linestyle=':', color='gray')
+        ax2.set_ylim(0, 105)
+        
+        plt.suptitle(f'Phenylalanine (F) Distribution: Upstream vs Downstream of 2A (n={len(self.all_downstream)})',
+                     fontsize=15, fontweight='bold', color='#8B4513', y=1.02)
+        
+        comparison_file = f"2a_phenylalanine_upstream_vs_downstream_{timestamp}.png"
+        plt.tight_layout()
+        plt.savefig(comparison_file, dpi=300, bbox_inches='tight')
+        print(f"[OK] Saved comparison plot to: {comparison_file}")
+        
+        # Print key comparison
+        print("\n" + "=" * 80)
+        print("KEY COMPARISON: Position 2 (upstream N-terminal) vs Position 2 (downstream N-terminal)")
+        print("=" * 80)
+        f_at_up2 = f_freq_upstream.get(2, 0)
+        f_at_down2 = f_freq_by_position.get(2, 0)
+        print(f"F at position 2 (upstream, 2nd from N-terminus): {f_at_up2:.2f}%")
+        print(f"F at position 2 (downstream, 2nd from N-terminus after 2A): {f_at_down2:.2f}%")
+        print(f"Difference: {f_at_down2 - f_at_up2:.2f}% {'(downstream enriched)' if f_at_down2 > f_at_up2 else '(upstream enriched)'}")
+        if f_at_up2 > 0:
+            print(f"Fold difference: {f_at_down2 / f_at_up2:.2f}x")
+        else:
+            print("Fold difference: Infinite (no F at position 2 upstream)")
+        
+        # Save comparison data
+        comparison_data = {
+            'Position_Type': ['Upstream_pos2', 'Downstream_pos2', 'Difference', 'Fold_Change'],
+            'F_Frequency_%': [f_at_up2, f_at_down2, f_at_down2 - f_at_up2, 
+                              f_at_down2 / f_at_up2 if f_at_up2 > 0 else float('inf')]
+        }
+        df_comp = pd.DataFrame(comparison_data)
+        comp_csv = f"2a_phenylalanine_comparison_{timestamp}.csv"
+        df_comp.to_csv(comp_csv, index=False)
+        print(f"[OK] Saved comparison data to: {comp_csv}")
+        
+        return f_freq_by_position, background_f_freq
+    
     def generate_outputs(self):
         """
         Generate output files with results
@@ -512,6 +763,9 @@ class Viral2AFinder:
         print("=" * 80)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # NEW: Phenylalanine distribution analysis
+        self.analyze_phenylalanine_distribution(timestamp)
         
         # Enrichment analysis on ALL downstream proteins
         freq_matrix, enrichment_matrix, positions, background_freq = self.calculate_enrichment()
@@ -657,8 +911,8 @@ def main():
     # Initialize with analysis window (positions to analyze after P)
     finder = Viral2AFinder(analysis_window=20)
     
-    # Run analysis to find ALL 2A sequences (downloads up to 2000 sequences)
-    finder.run_analysis(total_sequences=2000)
+    # Run analysis to find ALL 2A sequences (downloads up to 10000 sequences)
+    finder.run_analysis(total_sequences=10000)
 
 
 if __name__ == "__main__":
