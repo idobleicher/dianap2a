@@ -643,7 +643,7 @@ class Viral2AFinder:
                   fontsize=14, fontweight='bold', color='#8B4513', pad=20)
         plt.legend(fontsize=11)
         plt.grid(axis='y', alpha=0.3, linestyle=':', color='gray')
-        plt.xticks(positions)
+        plt.xticks(positions, [str(p) for p in positions])
         
         output_file = f"2a_phenylalanine_analysis_{timestamp}.png"
         plt.tight_layout()
@@ -698,6 +698,8 @@ class Viral2AFinder:
         ax1.legend(fontsize=10)
         ax1.grid(axis='y', alpha=0.3, linestyle=':', color='gray')
         ax1.set_ylim(0, 105)
+        ax1.set_xticks(positions_up)
+        ax1.set_xticklabels([str(p) for p in positions_up])
         
         # Downstream plot (positions 2-20)
         positions_down = list(range(2, 21))
@@ -718,6 +720,8 @@ class Viral2AFinder:
         ax2.legend(fontsize=10)
         ax2.grid(axis='y', alpha=0.3, linestyle=':', color='gray')
         ax2.set_ylim(0, 105)
+        ax2.set_xticks(positions_down)
+        ax2.set_xticklabels([str(p) for p in positions_down])
         
         plt.suptitle(f'Phenylalanine (F) Distribution: Upstream vs Downstream of 2A (n={len(self.all_downstream)})',
                      fontsize=15, fontweight='bold', color='#8B4513', y=1.02)
